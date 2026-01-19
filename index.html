@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BC air trafic control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root{
+ --bg:#0b1320;--panel:#121b2d;--radar:#06101c;
+ --accent:#f0b429;--text:#d7e0ea;--muted:#8fa3bf;
+ --danger:#ff4d4d;--warn:#ffae42;--safe:#4cff9f
+}
+*{box-sizing:border-box;font-family:Segoe UI,system-ui}
+body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}
+#layout{display:grid;grid-template-columns:360px 1fr;height:100vh}
+
+/* LEFT PANEL */
+#panel{background:var(--panel);border-right:1px solid #1c2a44;padding:10px;overflow:auto}
+h2{margin:0;color:var(--accent);font-size:15px}
+#score{margin:6px 0;font-size:13px;color:var(--safe)}
+.strip{background:#0e1627;border:1px solid #1e2c4a;padding:6px;margin:6px 0;cursor:pointer}
+.strip.active{outline:2px solid var(--accent)}
+.meta{font-size:12px;color:var(--muted)}
+.controls button{
+ margin:4px 2px;padding:5px 8px;font-size:11px;
+ background:#1c2a44;color:var(--text);border:1px solid #243a63;cursor:pointer
+}
+.controls button:hover{border-color:var(--accent)}
+
+/* RADAR */
+#radarWrap{position:relative;background:radial-gradient(circle,#0b1c33,#040812)}
+#radar{width:100%;height:100%}
+.grid line{stroke:#0f1f38}
+.sector{fill:none;stroke:#1c2a44;stroke-width:2}
+.plane{font-size:20px;fill:#f0b429;pointer-events:none}
+.route{fill:none;stroke:#5fa8ff;stroke-dasharray:4 4;stroke-width:2;opacity:1;transition:opacity 0.2s}
+.warn{stroke:var(--warn)!important}
+.danger{stroke:var(--danger)!important}
+.weather{fill:rgba(255,174,66,.15);stroke:#ffae42;stroke-dasharray:5 5}
+
+/* RADAR SWEEP */
+.sweep{stroke:var(--accent);stroke-width:2;stroke-linecap:round}
+
+/* POPUPS */
+.popup{
+ position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+ background:#0e1627;border:2px solid var(--accent);
+ padding:18px;display:none;z-index:10;width:320px
+}
+.popup h3{margin-top:0;color:var(--accent)}
+
+.planeLabel {
+ font-size:12px;
+ font-weight:600;
+ fill:#ffffff;
+ pointer-events:none;
+ transition:opacity 0.2s;
+}
+</style>
+</head>
+
+<body>
+<div id="layout">
+
+<!-- LEFT PANEL -->
+<div id="panel">
+ <h2>BC AEROCORPS — ATC</h2>
+ <div id="score">Score: 0</div>
+ <div id="flights"></div>
+ <div id="sectorCounts"></div>
+</div>
+
+<!-- RADAR -->
+<div id="radarWrap">
+ <svg id="radar"></svg>
+
+ <div class="popup" id="incident">
+   <h3>INCIDENT REPORT</h3>
+   <p id="incidentText"></p>
+   <button onclick="location.reload()">End Shift</button>
+ </div>
+</div>
+
+</div>
+
+<script>
+/* ================= CONFIG ================= */
+const radar=document.getElementById("radar");
+const W=window.innerWidth-360,H=window.innerHeight;
+radar.setAttribute("width",W);radar.setAttribute("height",H);
+const SEP=26,MAX=14;
+let planes=[],selected=null,score=0,run=true;
+let sweepAngle=0;
+
+/* ================= GRID ================= */
+const grid=document.createElementNS("http://www.w3.org/2000/svg","g");
+for(let i=0;i<W;i+=80){
+ let l=document.createElementNS("http://www.w3.org/2000/svg","line");
+ l.setAttribute("x1",i);l.setAttribute("y1",0);
+ l.setAttribute("x2",i);l.setAttribute("y2",H);grid.appendChild(l)
+}
+for(let i=0;i<H;i+=80){
+ let l=document.createElementNS("http://www.w3.org/2000/svg","line");
+ l.setAttribute("x1",0);l.setAttribute("y1",i);
+ l.setAttribute("x2",W);l.setAttribute("y2",i);grid.appendChild(l)
+}
+radar.appendChild(grid);
+
+/* ================= SECTORS ================= */
+const sectors=[];
+const sectorRows = 2, sectorCols = 4;
+for(let i=0;i<sectorRows;i++){
+  for(let j=0;j<sectorCols;j++){
+    const s = document.createElementNS("http://www.w3.org/2000/svg","rect");
+    s.setAttribute("x", j*W/sectorCols);
+    s.setAttribute("y", i*H/sectorRows);
+    s.setAttribute("width", W/sectorCols);
+    s.setAttribute("height", H/sectorRows);
+    s.classList.add("sector");
+    radar.appendChild(s);
+    sectors.push({x: s.x.baseVal.value, y: s.y.baseVal.value, w: W/sectorCols, h: H/sectorRows, count: 0});
+  }
+}
+
+/* ================= WEATHER ================= */
+const weatherZones=[];
+function spawnWeather(){
+ const z=document.createElementNS("http://www.w3.org/2000/svg","circle");
+ const wx=Math.random()*W,wy=Math.random()*H;
+ z.setAttribute("cx",wx);z.setAttribute("cy",wy);
+ z.setAttribute("r",80);z.classList.add("weather");
+ radar.appendChild(z);
+ weatherZones.push({x:wx,y:wy,r:80})
+}
+spawnWeather();
+
+/* ================= UTIL ================= */
+const R=(a,b)=>Math.random()*(b-a)+a;
+const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+/* ================= PLANES ================= */
+function spawnPlane(){
+ if(planes.length>=MAX)return;
+ const p={
+  id:"BC-"+Math.floor(R(1000,9999)),
+  x:R(100,W-100),y:R(100,H-100),
+  route:[{x:R(100,W-100),y:R(100,H-100)}],
+  speed:R(.3,.5),fuel:100,holding:false,runway:false,
+  svg:null,path:null,label:null
+ };
+ createSVG(p);planes.push(p);addStrip(p)
+}
+
+function createSVG(p){
+  p.svg = document.createElementNS("http://www.w3.org/2000/svg","text");
+  p.svg.textContent = "✈";
+  p.svg.setAttribute("x", p.x);
+  p.svg.setAttribute("y", p.y);
+  p.svg.setAttribute("font-size","20");
+  p.svg.setAttribute("text-anchor","middle");
+  p.svg.setAttribute("dominant-baseline","middle");
+  radar.appendChild(p.svg);
+
+  p.path = document.createElementNS("http://www.w3.org/2000/svg","path");
+  p.path.setAttribute("stroke","#5fa8ff");
+  p.path.setAttribute("stroke-width","2");
+  p.path.setAttribute("fill","none");
+  radar.appendChild(p.path);
+
+  p.label = document.createElementNS("http://www.w3.org/2000/svg","text");
+  p.label.textContent = p.id;
+  p.label.setAttribute("x", p.x+15);
+  p.label.setAttribute("y", p.y-10);
+  p.label.setAttribute("fill","#ffffff");
+  radar.appendChild(p.label);
+}
+
+/* ================= UI ================= */
+function addStrip(p){
+ const d=document.createElement("div");
+ d.className="strip";
+ d.innerHTML=`<b>${p.id}</b>
+ <div class="meta">Fuel: <span>${p.fuel.toFixed(0)}</span>%</div>
+ <div class="controls">
+  <button onclick="hold('${p.id}')">HOLD</button>
+  <button onclick="assignRunway('${p.id}')">RUNWAY</button>
+ </div>`;
+ d.onclick=()=>{
+  document.querySelectorAll(".strip").forEach(s=>s.classList.remove("active"));
+  d.classList.add("active");selected=p
+ };
+ document.getElementById("flights").appendChild(d);p.strip=d
+}
+
+/* ================= CONTROLS ================= */
+function assignRunway(id){
+ const p=planes.find(x=>x.id===id);
+ p.route=[{x:W/2,y:H-30}];p.runway=true
+}
+function hold(id){
+ const p = planes.find(x => x.id === id);
+ p.holding = !p.holding;
+ if(p.holding){
+   p.holdCenter={x:p.x,y:p.y};p.holdAngle=0;p.holdRadius=R(30,60);p.route=[]
+ }
+}
+
+/* ================= ROUTE DRAW ================= */
+radar.onclick=e=>{
+ if(!selected||!run||selected.holding)return;
+ const r=radar.getBoundingClientRect();
+ selected.route.push({x:e.clientX-r.left,y:e.clientY-r.top})
+};
+
+function drawRoute(p){
+ let d=`M ${p.x} ${p.y} `;
+ p.route.forEach(pt=>{
+   d += `L ${pt.x} ${pt.y} `;
+   if(!pt.marker){
+     pt.marker=document.createElementNS("http://www.w3.org/2000/svg","circle");
+     pt.marker.setAttribute("cx",pt.x);
+     pt.marker.setAttribute("cy",pt.y);
+     pt.marker.setAttribute("r",3);
+     pt.marker.setAttribute("fill","#5fa8ff");
+     radar.appendChild(pt.marker)
+   } else { pt.marker.setAttribute("cx",pt.x); pt.marker.setAttribute("cy",pt.y);}
+ });
+ p.path.setAttribute("d",d)
+}
+
+/* ================= SECTORS ================= */
+function sectorAnalysis(){
+ sectors.forEach(s=>s.count=0);
+ planes.forEach(p=>{
+   sectors.forEach(s=>{
+     if(p.x>=s.x && p.x<=s.x+s.w && p.y>=s.y && p.y<=s.y+s.h) s.count++;
+   });
+ });
+ document.getElementById("sectorCounts").innerHTML=
+  "<h3>Sectors:</h3>"+sectors.map((s,i)=>`Sector ${i+1}: ${s.count} planes`).join("<br>");
+}
+
+/* ================= SAFETY ================= */
+function detect(){
+  planes.forEach(p=>p.path.classList.remove("warn","danger"));
+  for(let i=0;i<planes.length;i++){
+    for(let j=i+1;j<planes.length;j++){
+      
+      // Skip if either plane is holding
+      if(planes[i].holding || planes[j].holding) continue;
+
+      const d=D(planes[i],planes[j]);
+      if(d<SEP) incident("Mid-air collision detected.");
+      else if(d<SEP*1.7){
+        planes[i].path.classList.add("warn");
+        planes[j].path.classList.add("warn");
+      }
+    }
+  }
+}
+
+function incident(msg){
+ run=false;
+ document.getElementById("incidentText").textContent=msg;
+ document.getElementById("incident").style.display="block";
+}
+
+function removePlane(p){
+ radar.removeChild(p.svg);
+ radar.removeChild(p.path);
+ radar.removeChild(p.label);
+ p.strip.remove();
+ planes=planes.filter(x=>x!==p);
+ document.getElementById("score").textContent="Score: "+score;
+}
+
+/* ================= SWEEP ================= */
+let sweepLine = document.createElementNS("http://www.w3.org/2000/svg","line");
+sweepLine.classList.add("sweep");
+radar.appendChild(sweepLine);
+
+/* ================= UPDATE LOOP ================= */
+function update(){
+ if(!run){ requestAnimationFrame(update); return;}
+
+ sweepAngle += 0.02;
+ const cx=W/2, cy=H/2;
+ const length=Math.max(W,H);
+ sweepLine.setAttribute("x1",cx);
+ sweepLine.setAttribute("y1",cy);
+ sweepLine.setAttribute("x2",cx+length*Math.cos(sweepAngle));
+ sweepLine.setAttribute("y2",cy+length*Math.sin(sweepAngle));
+
+ planes.forEach(p=>{
+   // Move along route
+   if(!p.holding && p.route.length){
+     const t=p.route[0];
+     const dx=t.x-p.x, dy=t.y-p.y;
+     const d=Math.hypot(dx,dy);
+     if(d<2){ p.route.shift(); if(p.runway){score+=100;removePlane(p)} }
+     else { p.x+=dx/d*p.speed; p.y+=dy/d*p.speed; }
+     p.fuel-=0.03;
+   }
+
+   if(p.fuel<=0) incident("Fuel exhaustion — emergency loss.");
+
+   // Update SVG positions
+   p.svg.setAttribute("x",p.x);
+   p.svg.setAttribute("y",p.y);
+   p.label.setAttribute("x",p.x+15);
+   p.label.setAttribute("y",p.y-10);
+
+   drawRoute(p);
+ });
+
+ detect();
+ sectorAnalysis();
+ requestAnimationFrame(update);
+}
+
+/* ================= INIT ================= */
+for(let i=0;i<8;i++) spawnPlane();
+setInterval(spawnPlane,7000);
+update();
+</script>
+</body>
+</html>
