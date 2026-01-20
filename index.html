@@ -10,9 +10,19 @@
  --accent:#f0b429;--text:#d7e0ea;--muted:#8fa3bf;
  --danger:#ff4d4d;--warn:#ffae42;--safe:#4cff9f
 }
+
+/* === ADDITION #11: NIGHT MODE VARIABLES (ADDITIVE) === */
+body.night{
+ --bg:#03060f;
+ --panel:#070b18;
+ --radar:#000000;
+ --text:#a9bbff;
+ --accent:#6fa8ff;
+}
+
 *{box-sizing:border-box;font-family:Segoe UI,system-ui}
 body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}
-#layout{display:grid;grid-template-columns:360px 1fr;height:100vh}
+#layout{display:grid;grid-template-columns:200px 1fr;height:100vh}
 
 /* LEFT PANEL */
 #panel{background:var(--panel);border-right:1px solid #1c2a44;padding:10px;overflow:auto}
@@ -20,6 +30,10 @@ h2{margin:0;color:var(--accent);font-size:15px}
 #score{margin:6px 0;font-size:13px;color:var(--safe)}
 .strip{background:#0e1627;border:1px solid #1e2c4a;padding:6px;margin:6px 0;cursor:pointer}
 .strip.active{outline:2px solid var(--accent)}
+.strip.warnFuel{border-color:var(--warn)}
+.strip.dangerFuel{border-color:var(--danger)}
+.strip.emergency{outline:2px solid var(--danger)}
+
 .meta{font-size:12px;color:var(--muted)}
 .controls button{
  margin:4px 2px;padding:5px 8px;font-size:11px;
@@ -28,11 +42,31 @@ h2{margin:0;color:var(--accent);font-size:15px}
 .controls button:hover{border-color:var(--accent)}
 
 /* RADAR */
-#radarWrap{position:relative;background:radial-gradient(circle,#0b1c33,#040812)}
-#radar{width:100%;height:100%}
+#radarWrap {
+  position: relative;
+  background: radial-gradient(circle,#0b1c33,#040812);
+  width: 100%;
+  height: 100vh; /* make it fill remaining viewport height */
+  touch-action: none; /* ← disables browser scrolling/zooming */
+  -ms-touch-action: none; /* for older Edge/IE */
+  -webkit-user-select: none; /* optional, prevents accidental text selection */
+  user-select: none;
+}
+
+#radar {
+  width: 100%;
+  height: 100%;
+}
+
 .grid line{stroke:#0f1f38}
 .sector{fill:none;stroke:#1c2a44;stroke-width:2}
-.plane{font-size:20px;fill:#f0b429;pointer-events:none}
+.plane{
+  font-size:20px;
+  fill:#f0b429;
+  cursor: pointer;
+  pointer-events: all; /* ← THIS FIXES IT */
+}
+
 .route{fill:none;stroke:#5fa8ff;stroke-dasharray:4 4;stroke-width:2;opacity:1;transition:opacity 0.2s}
 .warn{stroke:var(--warn)!important}
 .danger{stroke:var(--danger)!important}
@@ -56,18 +90,37 @@ h2{margin:0;color:var(--accent);font-size:15px}
  pointer-events:none;
  transition:opacity 0.2s;
 }
+
+@media (max-width: 600px){
+  #layout { grid-template-columns: 200px 1fr; }
+  .plane { font-size: 14px; fill:#ffffff }
+  .planeLabel { font-size: 10px; }
+  .controls button { font-size: 9px; padding:4px 6px; }
+}
 </style>
 </head>
 
 <body>
+  
+  <button onclick="toggleRun()">⏯ Pause/Resume</button>
+
+  
+  <audio id="ping" src="https://freesound.org/data/previews/341/341695_6242284-lq.mp3"></audio>
+<audio id="warnBeep" src="https://www.orangefreesounds.com/wp-content/uploads/2014/11/Beep-short.m3"></audio>
+<audio id="fuelAlert" src="https://freesound.org/data/previews/466/466178_9604726-lq.mp3"></audio>
+
 <div id="layout">
 
 <!-- LEFT PANEL -->
 <div id="panel">
  <h2>BC AEROCORPS — ATC</h2>
+ <button onclick="toggleNightMode()">🌙 Night Mode</button>
  <div id="score">Score: 0</div>
  <div id="flights"></div>
  <div id="sectorCounts"></div>
+ 
+
+
 </div>
 
 <!-- RADAR -->
@@ -81,18 +134,119 @@ h2{margin:0;color:var(--accent);font-size:15px}
  </div>
 </div>
 
+
+
 </div>
 
 <script>
-/* ================= CONFIG ================= */
 const radar=document.getElementById("radar");
 const W=window.innerWidth-360,H=window.innerHeight;
-radar.setAttribute("width",W);radar.setAttribute("height",H);
 const SEP=26,MAX=14;
-let planes=[],selected=null,score=0,run=true;
-let sweepAngle=0;
+const SPAWN_SAFE_DIST = SEP * 3;
 
-/* ================= GRID ================= */
+let planes=[],selected=null,run=true;
+
+let score = Number(localStorage.getItem("bc_atc_score")) || 0;
+const scoreEl = document.getElementById("score");
+updateScoreDisplay();
+
+
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  const sounds = ["ping", "warnBeep", "fuelAlert"];
+  sounds.forEach(id => {
+    const audio = document.getElementById(id);
+    audio.play().catch(()=>{}); 
+    audio.pause();
+    audio.currentTime = 0;
+  });
+  audioUnlocked = true;
+}
+
+document.body.addEventListener("click", unlockAudio, {once:true});
+
+let incidentLog = JSON.parse(localStorage.getItem("bc_atc_log")) || [];
+const logEl = document.getElementById("incidentLog");
+
+function addToLog(msg){
+    const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    incidentLog.push(entry);
+    localStorage.setItem("bc_atc_log", JSON.stringify(incidentLog));
+    const p = document.createElement("div");
+    p.textContent = entry;
+    logEl.appendChild(p);
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function resetLog(){
+    incidentLog = [];
+    localStorage.removeItem("bc_atc_log");
+    logEl.innerHTML = "";
+}
+
+
+const R=(a,b)=>Math.random()*(b-a)+a;
+const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+let sweepAngle=0;
+let radarZoom=1;
+
+
+let tiltX = 0; // left/right rotation
+let tiltY = 0; // up/down rotation
+let dragging = false, lastX = 0, lastY = 0;
+
+radarWrap.addEventListener("mousedown", e => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+});
+radarWrap.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    tiltX += dx * 0.2; // adjust sensitivity
+    tiltY += dy * 0.2;
+    tiltY = Math.max(-45, Math.min(45, tiltY)); // limit vertical tilt
+
+    // Apply skew/scale to radar to simulate 3D perspective
+    radar.setAttribute("transform", `translate(${W/2},${H/2}) rotateX(${tiltY}deg) rotateY(${tiltX}deg) translate(${-W/2},${-H/2})`);
+});
+radarWrap.addEventListener("mouseup", () => dragging = false);
+radarWrap.addEventListener("mouseleave", () => dragging = false);
+
+// Touch events
+radarWrap.addEventListener("touchstart", e => {
+    dragging = true;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+});
+radarWrap.addEventListener("touchmove", e => {
+    if (!dragging) return;
+    const dx = e.touches[0].clientX - lastX;
+    const dy = e.touches[0].clientY - lastY;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+
+    tiltX += dx * 0.2;
+    tiltY += dy * 0.2;
+    tiltY = Math.max(-45, Math.min(45, tiltY));
+
+    radar.setAttribute("transform", `translate(${W/2},${H/2}) rotateX(${tiltY}deg) rotateY(${tiltX}deg) translate(${-W/2},${-H/2})`);
+});
+radarWrap.addEventListener("touchend", () => dragging = false);
+
+const PLANE_TYPES={
+ jet:{speedMul:1.2,burnMul:1.9},
+ turboprop:{speedMul:0.9,burnMul:1.4},
+ cargo:{speedMul:0.75,burnMul:1.7}
+};
+
+radar.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
 const grid=document.createElementNS("http://www.w3.org/2000/svg","g");
 for(let i=0;i<W;i+=80){
  let l=document.createElementNS("http://www.w3.org/2000/svg","line");
@@ -106,23 +260,6 @@ for(let i=0;i<H;i+=80){
 }
 radar.appendChild(grid);
 
-/* ================= SECTORS ================= */
-const sectors=[];
-const sectorRows = 2, sectorCols = 4;
-for(let i=0;i<sectorRows;i++){
-  for(let j=0;j<sectorCols;j++){
-    const s = document.createElementNS("http://www.w3.org/2000/svg","rect");
-    s.setAttribute("x", j*W/sectorCols);
-    s.setAttribute("y", i*H/sectorRows);
-    s.setAttribute("width", W/sectorCols);
-    s.setAttribute("height", H/sectorRows);
-    s.classList.add("sector");
-    radar.appendChild(s);
-    sectors.push({x: s.x.baseVal.value, y: s.y.baseVal.value, w: W/sectorCols, h: H/sectorRows, count: 0});
-  }
-}
-
-/* ================= WEATHER ================= */
 const weatherZones=[];
 function spawnWeather(){
  const z=document.createElementNS("http://www.w3.org/2000/svg","circle");
@@ -134,56 +271,120 @@ function spawnWeather(){
 }
 spawnWeather();
 
-/* ================= UTIL ================= */
-const R=(a,b)=>Math.random()*(b-a)+a;
-const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const fuelStations = [];
+function spawnFuelStations() {
+  for (let i = 0; i < 3; i++) {
+    const fx = R(50, W - 50);
+    const fy = R(50, H - 50);
 
-/* ================= PLANES ================= */
+    const fSVG = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    fSVG.setAttribute("cx", fx);
+    fSVG.setAttribute("cy", fy);
+    fSVG.setAttribute("r", 8);
+    fSVG.setAttribute("fill", "#ff4d4d");
+    radar.appendChild(fSVG);
+
+    fuelStations.push({ x: fx, y: fy, svg: fSVG });
+  }
+}
+spawnFuelStations();
+
+
+function updateScoreDisplay(){
+  scoreEl.textContent = "Score: " + score.toLocaleString();
+}
+
+
 function spawnPlane(){
  if(planes.length>=MAX)return;
- const p={
-  id:"BC-"+Math.floor(R(1000,9999)),
-  x:R(100,W-100),y:R(100,H-100),
-  route:[{x:R(100,W-100),y:R(100,H-100)}],
-  speed:R(.3,.5),fuel:100,holding:false,runway:false,
-  svg:null,path:null,label:null
- };
+ const typeKeys=Object.keys(PLANE_TYPES);
+ const type=typeKeys[Math.floor(Math.random()*typeKeys.length)];
+
+let startX, startY;
+let attempts = 0;
+do {
+  startX = R(100, W - 100);
+  startY = R(100, H - 100);
+  attempts++;
+} while (!isSpawnSafe(startX, startY) && attempts < 20);
+
+if (attempts >= 20) return; // abort spawn if no safe space
+
+let destX = startX + (Math.random() < 0.5 ? R(50, 200) : -R(50, 200));
+let destY = startY + (Math.random() < 0.5 ? R(50, 200) : -R(50, 200));
+destX = Math.min(Math.max(destX, 50), W-50);
+destY = Math.min(Math.max(destY, 50), H-50);
+
+const p = {
+  id: "BC-" + Math.floor(R(1000,9999)),
+  type,
+  x: startX,
+  y: startY,
+  route: [{x: destX, y: destY}],
+  speed: R(1.0, .8) * PLANE_TYPES[type].speedMul,
+  fuel: 100,
+  burnMul: PLANE_TYPES[type].burnMul,
+  holding: false,
+  runway: false,
+  emergency: false,
+  distanceFlown: 0,
+  lastX: startX,
+  lastY: startY,
+  scorable: true,
+  svg: null,
+  path: null,
+  label: null,
+  angle: Math.random() * 2 * Math.PI,
+  curved: Math.random() < 0.15   // <-- 15% chance to be curved
+};
+
+
  createSVG(p);planes.push(p);addStrip(p)
 }
 
 function createSVG(p){
-  p.svg = document.createElementNS("http://www.w3.org/2000/svg","text");
-  p.svg.textContent = "✈";
-  p.svg.setAttribute("x", p.x);
-  p.svg.setAttribute("y", p.y);
-  p.svg.setAttribute("font-size","20");
-  p.svg.setAttribute("text-anchor","middle");
-  p.svg.setAttribute("dominant-baseline","middle");
-  radar.appendChild(p.svg);
+    p.svg = document.createElementNS("http://www.w3.org/2000/svg","text");
+    p.svg.textContent = "✈";
+    p.svg.setAttribute("x", p.x);
+    p.svg.setAttribute("y", p.y);
+    p.svg.setAttribute("font-size","20");
+    p.svg.setAttribute("text-anchor","middle");
+    p.svg.setAttribute("dominant-baseline","middle");
+    p.svg.setAttribute("class","plane");
+    p.svg.setAttribute("fill","#ffffff");
+    p.svg.addEventListener("click", (e)=>{ e.stopPropagation(); hold(p.id); });
+    radar.appendChild(p.svg);
 
-  p.path = document.createElementNS("http://www.w3.org/2000/svg","path");
-  p.path.setAttribute("stroke","#5fa8ff");
-  p.path.setAttribute("stroke-width","2");
-  p.path.setAttribute("fill","none");
-  radar.appendChild(p.path);
+    p.path = document.createElementNS("http://www.w3.org/2000/svg","path");
+    p.path.setAttribute("stroke","#5fa8ff");
+    p.path.setAttribute("stroke-width","2");
+    p.path.setAttribute("fill","none");
+    radar.appendChild(p.path);
 
-  p.label = document.createElementNS("http://www.w3.org/2000/svg","text");
-  p.label.textContent = p.id;
-  p.label.setAttribute("x", p.x+15);
-  p.label.setAttribute("y", p.y-10);
-  p.label.setAttribute("fill","#ffffff");
-  radar.appendChild(p.label);
+    p.label = document.createElementNS("http://www.w3.org/2000/svg","text");
+    p.label.textContent = p.id;
+    p.label.setAttribute("x", p.x + 15);
+    p.label.setAttribute("y", p.y - 10);
+    p.label.setAttribute("fill","#ffffff");
+    p.label.setAttribute("class","planeLabel");
+    radar.appendChild(p.label);
+
+    const distCenter = D(p, {x: W/2, y: H/2});
+    const maxDist = Math.hypot(W/2, H/2);
+    p.svg.setAttribute("opacity", 1 - (distCenter / maxDist) * 0.7);
+    p.label.setAttribute("opacity", 1 - (distCenter / maxDist) * 0.7);
+
+    drawRoute(p);
 }
 
-/* ================= UI ================= */
 function addStrip(p){
  const d=document.createElement("div");
  d.className="strip";
  d.innerHTML=`<b>${p.id}</b>
- <div class="meta">Fuel: <span>${p.fuel.toFixed(0)}</span>%</div>
+ <div class="meta">Fuel: <span class="fuel">${p.fuel.toFixed(0)}</span>%</div>
  <div class="controls">
   <button onclick="hold('${p.id}')">HOLD</button>
-  <button onclick="assignRunway('${p.id}')">RUNWAY</button>
+  <button onclick="declareEmergency('${p.id}')">EMERG</button>
  </div>`;
  d.onclick=()=>{
   document.querySelectorAll(".strip").forEach(s=>s.classList.remove("active"));
@@ -192,136 +393,329 @@ function addStrip(p){
  document.getElementById("flights").appendChild(d);p.strip=d
 }
 
-/* ================= CONTROLS ================= */
 function assignRunway(id){
  const p=planes.find(x=>x.id===id);
  p.route=[{x:W/2,y:H-30}];p.runway=true
 }
+
 function hold(id){
- const p = planes.find(x => x.id === id);
- p.holding = !p.holding;
- if(p.holding){
-   p.holdCenter={x:p.x,y:p.y};p.holdAngle=0;p.holdRadius=R(30,60);p.route=[]
- }
+  const p = planes.find(x => x.id === id);
+  if(!p) return;
+
+  if(p.holding){
+      p.holding = false;
+      if(p.savedRoute){ p.route = p.savedRoute; p.savedRoute=null; }
+      if(p.holdTimeout){ clearTimeout(p.holdTimeout); p.holdTimeout=null; }
+  } else {
+      p.holding = true;
+      p.holdCenter={x:p.x,y:p.y};
+      p.holdAngle=0;
+      p.holdRadius=R(30,60);
+      p.savedRoute = p.route.slice();
+      p.route=[];
+      
+  }
+
+  if(p.strip) p.strip.classList.toggle("active",p.holding);
 }
 
-/* ================= ROUTE DRAW ================= */
+function declareEmergency(id){
+  const p = planes.find(x => x.id === id);
+  if(!p) return;
+
+  p.emergency = true;
+  p.holding = false;
+
+  let closest = fuelStations[0];
+  let minDist = D(p, closest);
+  for (const station of fuelStations) {
+    const dist = D(p, station);
+    if (dist < minDist) { minDist = dist; closest = station; }
+  }
+
+  p.route = [{ x: closest.x, y: closest.y }];
+  p.strip.classList.add("emergency");
+}
+
 radar.onclick=e=>{
  if(!selected||!run||selected.holding)return;
  const r=radar.getBoundingClientRect();
  selected.route.push({x:e.clientX-r.left,y:e.clientY-r.top})
 };
 
-function drawRoute(p){
- let d=`M ${p.x} ${p.y} `;
- p.route.forEach(pt=>{
-   d += `L ${pt.x} ${pt.y} `;
-   if(!pt.marker){
-     pt.marker=document.createElementNS("http://www.w3.org/2000/svg","circle");
-     pt.marker.setAttribute("cx",pt.x);
-     pt.marker.setAttribute("cy",pt.y);
-     pt.marker.setAttribute("r",3);
-     pt.marker.setAttribute("fill","#5fa8ff");
-     radar.appendChild(pt.marker)
-   } else { pt.marker.setAttribute("cx",pt.x); pt.marker.setAttribute("cy",pt.y);}
- });
- p.path.setAttribute("d",d)
+function removePlane(p) {
+  if(p.svg) radar.removeChild(p.svg);
+  if(p.path) radar.removeChild(p.path);
+  if(p.label) radar.removeChild(p.label);
+  if(p.route) p.route.forEach(pt => { if(pt.marker) radar.removeChild(pt.marker); });
+  if(p.strip) p.strip.remove();
+  const index = planes.indexOf(p);
+  if(index !== -1) planes.splice(index, 1);
 }
 
-/* ================= SECTORS ================= */
-function sectorAnalysis(){
- sectors.forEach(s=>s.count=0);
- planes.forEach(p=>{
-   sectors.forEach(s=>{
-     if(p.x>=s.x && p.x<=s.x+s.w && p.y>=s.y && p.y<=s.y+s.h) s.count++;
-   });
- });
- document.getElementById("sectorCounts").innerHTML=
-  "<h3>Sectors:</h3>"+sectors.map((s,i)=>`Sector ${i+1}: ${s.count} planes`).join("<br>");
+
+function getCubicBezierPoint(t, p0, p1, p2, p3) {
+    const u = 1 - t;
+    const tt = t*t;
+    const uu = u*u;
+    const uuu = uu * u;
+    const ttt = tt * t;
+
+    return {
+        x: uuu*p0.x + 3*uu*t*p1.x + 3*u*tt*p2.x + ttt*p3.x,
+        y: uuu*p0.y + 3*uu*t*p1.y + 3*u*tt*p2.y + ttt*p3.y
+    };
 }
 
-/* ================= SAFETY ================= */
+
+function drawRoute(p) {
+    if (!p.route.length) return;
+
+    let d = `M ${p.x} ${p.y} `;  // Start at plane's current position
+    const points = [{ x: p.x, y: p.y }, ...p.route];
+
+    for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+
+       if(p.emergency) p.path.setAttribute("stroke", "var(--danger)");
+else if(p.holding) p.path.setAttribute("stroke", "#6fa8ff"); // holding pattern color
+else if(p.curved) p.path.setAttribute("stroke", "#5fa8ff");
+else p.path.setAttribute("stroke", "#4cff9f"); // normal
+
+       
+       
+        if(p.curved){  // <-- only curve sometimes
+            const cp1x = prev.x + (curr.x - prev.x) / 2;
+            const cp1y = prev.y;
+            const cp2x = curr.x - (curr.x - prev.x) / 2;
+            const cp2y = curr.y;
+            d += `C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${curr.x} ${curr.y} `;
+        } else {
+            d += `L ${curr.x} ${curr.y} `; // straight line
+        }
+
+        if(!curr.marker){
+          curr.marker = document.createElementNS("http://www.w3.org/2000/svg","circle");
+          curr.marker.setAttribute("cx",curr.x);
+          curr.marker.setAttribute("cy",curr.y);
+          curr.marker.setAttribute("r",3);
+          curr.marker.setAttribute("fill","#5fa8ff");
+          radar.appendChild(curr.marker);
+        } else {
+          curr.marker.setAttribute("cx", curr.x);
+          curr.marker.setAttribute("cy", curr.y);
+        }
+    }
+
+    p.path.setAttribute("d", d);
+}
+
+
+let incidentActive = false;
+let lastWarnTime = 0;
+
 function detect(){
-  planes.forEach(p=>p.path.classList.remove("warn","danger"));
-  for(let i=0;i<planes.length;i++){
-    for(let j=i+1;j<planes.length;j++){
-      
-      // Skip if either plane is holding
-      if(planes[i].holding || planes[j].holding) continue;
+  planes.forEach(p => p.path.classList.remove("warn","danger"));
+  if(incidentActive) return;
+  const flyingPlanes = planes.filter(p => !p.holding && !p.landing);
+  const now = performance.now();
 
-      const d=D(planes[i],planes[j]);
-      if(d<SEP) incident("Mid-air collision detected.");
-      else if(d<SEP*1.7){
-        planes[i].path.classList.add("warn");
-        planes[j].path.classList.add("warn");
+  for(let i=0; i<flyingPlanes.length; i++){
+    for(let j=i+1; j<flyingPlanes.length; j++){
+      const p1 = flyingPlanes[i], p2 = flyingPlanes[j];
+      const d = D(p1, p2);
+
+      
+
+      
+      if(d < SEP) { 
+        incidentActive = true; 
+        incident("Mid-air collision detected."); 
+        return; 
+      }
+
+      else if(d < SEP*1.7){ 
+        p1.path.classList.add("warn"); 
+        p2.path.classList.add("warn"); 
+
+        if(now - lastWarnTime > 500){
+          const beep = document.getElementById("warnBeep");
+          beep.currentTime = 0;
+          beep.play().catch(()=>{}); 
+          lastWarnTime = now;
+        }
       }
     }
   }
 }
 
+function isSpawnSafe(x, y) {
+  return planes.every(p => Math.hypot(p.x - x, p.y - y) > SPAWN_SAFE_DIST);
+}
+
+
+function toggleRun(){
+    run = !run;
+}
+
+
 function incident(msg){
- run=false;
- document.getElementById("incidentText").textContent=msg;
- document.getElementById("incident").style.display="block";
+  run=false;
+  const popup = document.getElementById("incident");
+  document.getElementById("incidentText").textContent = msg;
+  popup.style.display = "block";
+  
+  addToLog(msg); // <-- ADD THIS
 }
 
-function removePlane(p){
- radar.removeChild(p.svg);
- radar.removeChild(p.path);
- radar.removeChild(p.label);
- p.strip.remove();
- planes=planes.filter(x=>x!==p);
- document.getElementById("score").textContent="Score: "+score;
+const sweepGroup = document.createElementNS("http://www.w3.org/2000/svg","g");
+radar.appendChild(sweepGroup);
+
+let sweepLines = [];
+
+function updateSweep(){
+    const length = Math.max(W,H);
+    const x2 = W/2 + Math.cos(sweepAngle) * length;
+    const y2 = H/2 + Math.sin(sweepAngle) * length;
+
+    const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+    line.setAttribute("x1", W/2);
+    line.setAttribute("y1", H/2);
+    line.setAttribute("x2", x2);
+    line.setAttribute("y2", y2);
+    line.setAttribute("stroke", "var(--accent)");
+    line.setAttribute("stroke-width", 2);
+    line.setAttribute("opacity", 0.6);
+    sweepGroup.appendChild(line);
+    sweepLines.push(line);
+if(sweepLines.length > 30){
+  const old = sweepLines.shift();
+  sweepGroup.removeChild(old);
 }
 
-/* ================= SWEEP ================= */
-let sweepLine = document.createElementNS("http://www.w3.org/2000/svg","line");
-sweepLine.classList.add("sweep");
-radar.appendChild(sweepLine);
-
-/* ================= UPDATE LOOP ================= */
-function update(){
- if(!run){ requestAnimationFrame(update); return;}
-
- sweepAngle += 0.02;
- const cx=W/2, cy=H/2;
- const length=Math.max(W,H);
- sweepLine.setAttribute("x1",cx);
- sweepLine.setAttribute("y1",cy);
- sweepLine.setAttribute("x2",cx+length*Math.cos(sweepAngle));
- sweepLine.setAttribute("y2",cy+length*Math.sin(sweepAngle));
-
- planes.forEach(p=>{
-   // Move along route
-   if(!p.holding && p.route.length){
-     const t=p.route[0];
-     const dx=t.x-p.x, dy=t.y-p.y;
-     const d=Math.hypot(dx,dy);
-     if(d<2){ p.route.shift(); if(p.runway){score+=100;removePlane(p)} }
-     else { p.x+=dx/d*p.speed; p.y+=dy/d*p.speed; }
-     p.fuel-=0.03;
-   }
-
-   if(p.fuel<=0) incident("Fuel exhaustion — emergency loss.");
-
-   // Update SVG positions
-   p.svg.setAttribute("x",p.x);
-   p.svg.setAttribute("y",p.y);
-   p.label.setAttribute("x",p.x+15);
-   p.label.setAttribute("y",p.y-10);
-
-   drawRoute(p);
- });
-
- detect();
- sectorAnalysis();
- requestAnimationFrame(update);
+    // fade out old lines
+    sweepLines.forEach(l=>{
+        let o = parseFloat(l.getAttribute("opacity"));
+        l.setAttribute("opacity", o*0.95);
+        if(o*0.95<0.05){
+            sweepGroup.removeChild(l);
+        }
+    });
 }
 
-/* ================= INIT ================= */
-for(let i=0;i<8;i++) spawnPlane();
-setInterval(spawnPlane,7000);
-update();
+let windX = 0.1;
+let windY = 0;
+
+let lastTime = performance.now();
+function update(time){
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+
+   sweepAngle += 0.02;
+updateSweep();
+
+   
+   
+    if(!run){ requestAnimationFrame(update); return;}
+    sweepAngle += 0.02;
+    const length=Math.max(W,H);
+   
+    
+    planes.forEach(p=>{
+    if(p.landing) return;
+    if(p.holding) return;
+
+    if(p.route.length){
+        const t=p.route[0];
+        const dx=t.x-p.x, dy=t.y-p.y;
+        const d=Math.hypot(dx,dy);
+
+        if(d < 2){ 
+            p.route.shift(); 
+            if(p.route.length === 0){
+
+    if(p.scorable){
+        let basePoints = Math.floor(p.distanceFlown);
+
+        if(p.emergency) basePoints = Math.floor(basePoints * 0.5);
+
+        score += basePoints;
+        localStorage.setItem("bc_atc_score", score);
+        updateScoreDisplay();
+    }
+
+                if(p.svg){ p.svg.style.transition = "opacity 0.5s"; p.svg.style.opacity = 0; }
+                if(p.label){ p.label.style.transition = "opacity 0.5s"; p.label.style.opacity = 0; }
+                if(p.path){ p.path.style.transition = "opacity 0.5s"; p.path.style.opacity = 0; }
+                p.route.forEach(pt => { if(pt.marker){ pt.marker.style.transition="opacity 0.5s"; pt.marker.style.opacity=0; }});
+                spawnPlane();
+                setTimeout(() => removePlane(p), 500);
+            }
+        }
+
+        if(!p.landing && !p.holding){ p.fuel -= p.speed*p.burnMul*dt*1.5; if(p.fuel<0) p.fuel=0; }
+
+        const windCircle = { x: W/2, y: H/2, r: 100 };
+        const distToCircle = Math.hypot(p.x - windCircle.x, p.y - windCircle.y);
+        let speedFactor = distToCircle <= windCircle.r ? 0.4 : 1;
+
+        let avoidX = 0, avoidY = 0;
+        const avoidDist = Math.hypot(avoidX, avoidY);
+        if(avoidDist > 0){ avoidX /= avoidDist; avoidY /= avoidDist; }
+        p.x += (dx/d + avoidX) * p.speed * 0.7 * speedFactor;
+        p.y += (dy/d + avoidY) * p.speed * 0.7 * speedFactor;
+        p.x += windX * p.speed * 0.1 * speedFactor;
+        p.y += windY * p.speed * 0.1 * speedFactor;
+
+        const fuelSpan=p.strip.querySelector(".fuel");
+        fuelSpan.textContent=p.fuel.toFixed(0);
+        p.strip.classList.toggle("warnFuel", p.fuel<30);
+        p.strip.classList.toggle("dangerFuel", p.fuel<10);
+        if(p.fuel<=0){
+  p.scorable = false;
+  incident("Fuel exhaustion — emergency loss.");
+}
+
+        p.svg.setAttribute("x",p.x);
+        p.svg.setAttribute("y",p.y);
+        p.label.setAttribute("x",p.x+15);
+        p.label.setAttribute("y",p.y-10);
+        drawRoute(p);
+    }
+    
+    const dxMove = p.x - p.lastX;
+const dyMove = p.y - p.lastY;
+p.distanceFlown += Math.hypot(dxMove, dyMove);
+p.lastX = p.x;
+p.lastY = p.y;
+
+
+    if(p.emergency && p.route.length===0){
+        p.fuel=Math.min(p.fuel+25,100);
+        p.emergency=false;
+        p.strip.classList.remove("emergency");
+        p.route.push({x:R(100,W-100),y:R(100,H-100)});
+    }
+
+    });
+
+    detect();
+    requestAnimationFrame(update);
+}
+requestAnimationFrame(update);
+
+radar.addEventListener("wheel", e=>{
+  e.preventDefault();
+  radarZoom += e.deltaY*-0.001;
+  radarZoom=Math.max(0.6,Math.min(2,radarZoom));
+  radar.setAttribute("viewBox", `${(W-W/radarZoom)/2} ${(H-H/radarZoom)/2} ${W/radarZoom} ${H/radarZoom}`);
+});
+
+function toggleNightMode(){ document.body.classList.toggle("night"); }
+
+for(let i=0;i<1;i++) spawnPlane();
+setInterval(spawnPlane,5000);
 </script>
 </body>
 </html>
