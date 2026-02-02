@@ -593,7 +593,27 @@ radar.appendChild(sweepGroup);
 
 let sweepLines = [];
 
-function updateSweep(){
+async function enableNotifications() {
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") return alert("Notifications denied");
+
+  const reg = await navigator.serviceWorker.ready;
+
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: "YOUR_PUBLIC_VAPID_KEY"
+  });
+
+  await fetch("https://YOUR-WORKER-URL/subscribe", {
+    method: "POST",
+    body: JSON.stringify(sub),
+    headers: { "Content-Type": "application/json" }
+  });
+
+  alert("Notifications enabled ✈️");
+}
+
+ function updateSweep(){
     const length = Math.max(W,H);
     const x2 = W/2 + Math.cos(sweepAngle) * length;
     const y2 = H/2 + Math.sin(sweepAngle) * length;
