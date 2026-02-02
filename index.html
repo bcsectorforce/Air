@@ -131,6 +131,7 @@ h2{margin:0;color:var(--accent);font-size:15px}
 <!-- LEFT PANEL -->
 <div id="panel">
  <h2>BC AEROCORPS — ATC</h2>
+ <button onclick="enableNotifications()">🔔 Enable Alerts</button>
  <button onclick="toggleNightMode()">🌙 Night Mode</button>
  <div id="score">Score: 0</div>
  <div id="flights"></div>
@@ -729,6 +730,10 @@ radar.addEventListener("wheel", e=>{
   radarZoom=Math.max(0.6,Math.min(2,radarZoom));
   radar.setAttribute("viewBox", `${(W-W/radarZoom)/2} ${(H-H/radarZoom)/2} ${W/radarZoom} ${H/radarZoom}`);
 });
+
+ if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js");
+}
 
 function toggleNightMode(){ document.body.classList.toggle("night"); }
 
